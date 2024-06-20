@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <crypt.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <openssl/ssl.h>
@@ -39,13 +41,102 @@ char *base64encode(const unsigned char *input, int length) {
     return encoded_data;
 }
 
+/**
+ * @brief Hashes a password using bcrypt.
+ * 
+ * @param password The password to hash.
+ * @return char* The hashed password.
+ */
+char* hash_password(const char *password) {
+    char salt[30] = "$2b$12$";
+    const char *salt_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./";
+    for (int i = 7; i < 29; i++) {
+        salt[i] = salt_chars[rand() % 64];
+    }
+    salt[29] = '\0';
+
+    char *hashed_password = crypt(password, salt);
+    if (hashed_password == NULL) {
+        fprintf(stderr, "Error hashing password\n");
+        exit(-1);
+    }
+    return hashed_password;
+}
+
+void admin_menu() {
+    printf("Je suis administrateur let's go !\n");
+}
+
+char *get_groupname(SSL_CTX *ctx, SSL *ssl, char *combined) {
+    char request[1024] = {0};
+    char response[1024] = {0};
+
+    snprintf(request, sizeof(request), "POST %sgetgroup/ HTTP/1.1\r\n"
+                                    "Host: %s\r\n"
+                                    "Content-Length: 0\r\n"
+                                    "Authorization: Basic %s\r\n"
+                                    "Content-Type: application/x-www-form-urlencoded\r\n"
+                                    "\r\n",
+                                    URL, SERVER_ADDR, combined);
+
+    SSL_write(ssl, request, strlen(request));
+    printf("Request sent:\n%s\n", request);
+
+    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
+    char *pos = NULL;
+    if (bytes > 0) {
+        response[bytes] = '\0';
+        printf("Response received:\n%s\n", response);
+
+        pos = strstr(response, "\r\n\r\n");
+        if (pos) {
+            pos += 4;
+        }
+    } else {
+        fprintf(stderr, "SSL read error\n");
+        ERR_print_errors_fp(stderr);
+        return NULL;
+    }
+
+    return pos;
+}
+
+int add_user(SSL_CTX *ctx, SSL *ssl, char *newUsername, char *newPassword, char *newGroupname, char *combined) {
+    char request[1024] = {0};
+    char response[1024] = {0};
+
+    snprintf(request, sizeof(request), "POST %sadduser/ HTTP/1.1\r\n"
+                                        "Host: %s\r\n"
+                                        "Authorization: Basic %s\r\n"
+                                        "Content-Type: application/x-www-form-urlencoded\r\n"
+                                        "Content-Length: %d\r\n"
+                                        "\r\n"
+                                        "username=%s&password=%s&groupname=%s",
+                                        URL, SERVER_ADDR, combined,
+                                        strlen(newUsername) + strlen(newPassword) + strlen(newGroupname) + 2,
+                                        newUsername, newPassword, newGroupname);
+
+    SSL_write(ssl, request, strlen(request));
+    printf("Request sent:\n%s\n", request);
+
+    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
+    if (bytes > 0) {
+        response[bytes] = '\0';
+        printf("Response received:\n%s\n", response);
+    } else {
+        fprintf(stderr, "SSL read error\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    return 0;
+}
+
 int main() {
     SSL_CTX *ctx;
     SSL *ssl;
     int sockfd;
     struct sockaddr_in serv_addr;
-    char request[1024] = {0};
-    char response[1024] = {0};
 
     SSL_library_init();
     OpenSSL_add_all_algorithms();
@@ -89,45 +180,48 @@ int main() {
     char username[100];
     char password[100];
 
-    printf("Entrez votre nom d'utilisateur : ");
+    printf("Enter your username: ");
     scanf("%s", username);
 
-    printf("Entrez votre mot de passe : ");
+    printf("Enter your password: ");
     scanf("%s", password);
 
     char combined[256];
     snprintf(combined, sizeof(combined), "%s:%s", username, password);
-
     char *base64_encoded = base64encode((const unsigned char *)combined, strlen(combined));
     if (!base64_encoded) {
         fprintf(stderr, "Base64 encoding error\n");
-        SSL_free(ssl);
-        close(sockfd);
-        SSL_CTX_free(ctx);
         return -1;
     }
 
-    snprintf(request, sizeof(request), "POST %s HTTP/1.1\r\n"
-                                    "Host: %s\r\n"
-                                    "Content-Length: 0\r\n"
-                                    "Authorization: Basic %s\r\n"
-                                    "Content-Type: application/x-www-form-urlencoded\r\n"
-                                    "\r\n",
-                                    URL, SERVER_ADDR, base64_encoded);
+    char *groupname = get_groupname(ctx, ssl, base64_encoded);
+    printf("Groupname: %s\n", groupname);
+    if (groupname != NULL && strcmp(groupname, "admin") == 0) {
+        admin_menu();
+        printf("1 : add user\n");
+        printf("2 : modify user\n");
+        printf("3 : delete user\n");
+        int choice;
+        scanf("%d", &choice);
+        if (choice == 1) {
+            char newUsername[100];
+            char newPassword[100];
+            char newGroupname[100];
 
+            printf("Enter the username: ");
+            scanf("%s", newUsername);
+            printf("Enter the password: ");
+            scanf("%s", newPassword);
+            printf("Enter the groupname: ");
+            scanf("%s", newGroupname);
 
-    SSL_write(ssl, request, strlen(request));
-    printf("Request sent:\n%s\n", request);
-
-    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
-    if (bytes > 0) {
-        response[bytes] = '\0';
-        printf("Response received:\n%s\n", response);
+            add_user(ctx, ssl, newUsername, newPassword, newGroupname, base64_encoded);
+        }
     } else {
-        fprintf(stderr, "SSL read error\n");
-        ERR_print_errors_fp(stderr);
+        printf("You do not have administrative privileges.\n");
     }
 
+    free(base64_encoded);
     SSL_free(ssl);
     close(sockfd);
     SSL_CTX_free(ctx);

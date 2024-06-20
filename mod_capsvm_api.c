@@ -127,6 +127,102 @@ static authn_status capsvm_check_password(request_rec *r, const char *user, cons
     return AUTH_GRANTED;
 }
 
+static int getgroup_handler(request_rec *r) {
+    const char *groupname = apr_table_get(r->notes, "user_groupname");
+    if (groupname == NULL) {
+        groupname = "unknown";
+    }
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "%s", groupname);
+
+    return OK;
+}
+
+static int adduser_handler(request_rec *r) {
+    sqlite3 *db;
+    if (open_sqlite_db(&db) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    apr_array_header_t *pairs;
+    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    const char *username = NULL;
+    const char *password = NULL;
+    const char *groupname = NULL;
+
+    for (int i = 0; i < pairs->nelts; i++) {
+        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
+        char *buffer = NULL;
+        apr_size_t size;
+
+        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
+            continue;
+        }
+
+        buffer[size] = '\0';
+
+        if (strcmp(pair->name, "username") == 0) {
+            username = apr_pstrdup(r->pool, buffer);
+        } else if (strcmp(pair->name, "password") == 0) {
+            password = apr_pstrdup(r->pool, buffer);
+        } else if (strcmp(pair->name, "groupname") == 0) {
+            groupname = apr_pstrdup(r->pool, buffer);
+        }
+    }
+
+    if (username == NULL || password == NULL || groupname == NULL) {
+        close_sqlite_db(db);
+        return HTTP_BAD_REQUEST;
+    }
+
+    const char *sql = "INSERT INTO users (username, pw, groupname) VALUES (?, ?, ?)";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare statement");
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text");
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(stmt, 2, password, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text");
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(stmt, 3, groupname, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text");
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to execute statement");
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "User %s added in the database", username);
+
+    sqlite3_finalize(stmt);
+    close_sqlite_db(db);
+    return OK;
+}
+
 static int capsvm_handler(request_rec *r) {
     if (strcmp(r->handler, "capsvm_api")) {
         return DECLINED;
@@ -136,13 +232,13 @@ static int capsvm_handler(request_rec *r) {
         return HTTP_METHOD_NOT_ALLOWED;
     }
 
-    const char *groupname = apr_table_get(r->notes, "user_groupname");
-    if (groupname == NULL) {
-        groupname = "unknown";
+    if (strcmp(r->uri, "/capsvm_api/getgroup/") == 0) {
+        return getgroup_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/adduser/") == 0) {
+        return adduser_handler(r);
+    } else {
+        return HTTP_NOT_FOUND;
     }
-
-    ap_set_content_type(r, "text/plain");
-    ap_rprintf(r, "Groupe utilisateur : %s\n", groupname);
 
     return OK;
 }
