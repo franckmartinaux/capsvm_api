@@ -35,8 +35,7 @@
 **    Content-Type: text/html
 **  
 **    The sample page from mod_capsvm_api.c
-*/ 
-
+*/
 #include "httpd.h"
 #include "http_config.h"
 #include "http_protocol.h"
@@ -77,7 +76,7 @@ static authn_status capsvm_check_password(request_rec *r, const char *user, cons
         return AUTH_GENERAL_ERROR;
     }
 
-    const char *sql = "SELECT pw FROM users WHERE username = ?";
+    const char *sql = "SELECT pw, groupname FROM users WHERE username = ?";
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
         const char *err_msg = sqlite3_errmsg(db);
@@ -100,7 +99,9 @@ static authn_status capsvm_check_password(request_rec *r, const char *user, cons
         return AUTH_USER_NOT_FOUND;
     }
 
+    const unsigned char *db_groupname = sqlite3_column_text(stmt, 1);
     const unsigned char *db_hashed_password = sqlite3_column_text(stmt, 0);
+
     char *salt = strdup((const char *)db_hashed_password);
     char *hashed_password = crypt(password, salt);
     free(salt);
@@ -119,9 +120,31 @@ static authn_status capsvm_check_password(request_rec *r, const char *user, cons
         return AUTH_DENIED;
     }
 
+    apr_table_set(r->notes, "user_groupname", (const char *)db_groupname);
+
     sqlite3_finalize(stmt);
     close_sqlite_db(db);
     return AUTH_GRANTED;
+}
+
+static int capsvm_handler(request_rec *r) {
+    if (strcmp(r->handler, "capsvm_api")) {
+        return DECLINED;
+    }
+
+    if (r->method_number != M_POST) {
+        return HTTP_METHOD_NOT_ALLOWED;
+    }
+
+    const char *groupname = apr_table_get(r->notes, "user_groupname");
+    if (groupname == NULL) {
+        groupname = "unknown";
+    }
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "Groupe utilisateur : %s\n", groupname);
+
+    return OK;
 }
 
 static const authn_provider capsvm_auth_provider = {
@@ -151,6 +174,7 @@ static const command_rec capsvm_api_cmds[] = {
 };
 
 static void capsvm_api_register_hooks(apr_pool_t *p) {
+    ap_hook_handler(capsvm_handler, NULL, NULL, APR_HOOK_MIDDLE);
     ap_register_auth_provider(p, AUTHN_PROVIDER_GROUP, "capsvm_api_module", AUTHN_PROVIDER_VERSION, &capsvm_auth_provider, AP_AUTH_INTERNAL_PER_CONF);
 }
 
