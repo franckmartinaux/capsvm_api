@@ -15,6 +15,38 @@
 #define PORT 443
 #define URL "/capsvm_api/"
 
+SSL* connect_ssl(SSL_CTX *ctx, struct sockaddr_in *serv_addr) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("Socket creation error");
+        return NULL;
+    }
+
+    if (connect(sockfd, (struct sockaddr *)serv_addr, sizeof(*serv_addr)) < 0) {
+        perror("Connection failed");
+        close(sockfd);
+        return NULL;
+    }
+
+    SSL *ssl = SSL_new(ctx);
+    if (!ssl) {
+        fprintf(stderr, "SSL_new failed\n");
+        close(sockfd);
+        return NULL;
+    }
+
+    SSL_set_fd(ssl, sockfd);
+    if (SSL_connect(ssl) != 1) {
+        fprintf(stderr, "SSL connection error\n");
+        SSL_free(ssl);
+        close(sockfd);
+        return NULL;
+    }
+
+    return ssl;
+}
+
+
 char *base64encode(const unsigned char *input, int length) {
     BIO *bio, *b64;
     BUF_MEM *buffer_ptr;
@@ -105,16 +137,84 @@ int add_user(SSL_CTX *ctx, SSL *ssl, char *newUsername, char *newPassword, char 
     char request[1024] = {0};
     char response[1024] = {0};
 
-    snprintf(request, sizeof(request), "POST %sadduser/ HTTP/1.1\r\n"
+    char data[1024] = {0};
+    snprintf(data, sizeof(data), "username=%s&password=%s&groupname=%s", newUsername, newPassword, newGroupname);
+
+    snprintf(request, sizeof(request), "POST %smanagement/adduser/ HTTP/1.1\r\n"
                                         "Host: %s\r\n"
                                         "Authorization: Basic %s\r\n"
                                         "Content-Type: application/x-www-form-urlencoded\r\n"
                                         "Content-Length: %d\r\n"
                                         "\r\n"
-                                        "username=%s&password=%s&groupname=%s",
+                                        "%s",
                                         URL, SERVER_ADDR, combined,
-                                        strlen(newUsername) + strlen(newPassword) + strlen(newGroupname) + 2,
-                                        newUsername, newPassword, newGroupname);
+                                        (int)strlen(data), data);
+
+    SSL_write(ssl, request, strlen(request));
+    printf("Request sent:\n%s\n", request);
+
+    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
+    if (bytes > 0) {
+        response[bytes] = '\0';
+        printf("Response received:\n%s\n", response);
+    } else {
+        fprintf(stderr, "SSL read error\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    return 0;
+}
+
+int modify_user(SSL_CTX *ctx, SSL *ssl, char *username, char *newgroupname, char *combined) {
+    char request[1024] = {0};
+    char response[1024] = {0};
+
+    char data[1024] = {0};
+    snprintf(data, sizeof(data), "username=%s&groupname=%s", username, newgroupname);
+
+    snprintf(request, sizeof(request), "POST %smanagement/modifyuser/ HTTP/1.1\r\n"
+                                        "Host: %s\r\n"
+                                        "Authorization: Basic %s\r\n"
+                                        "Content-Type: application/x-www-form-urlencoded\r\n"
+                                        "Content-Length: %d\r\n"
+                                        "\r\n"
+                                        "%s",
+                                        URL, SERVER_ADDR, combined,
+                                        (int)strlen(data), data);
+
+    SSL_write(ssl, request, strlen(request));
+    printf("Request sent:\n%s\n", request);
+
+    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
+    if (bytes > 0) {
+        response[bytes] = '\0';
+        printf("Response received:\n%s\n", response);
+    } else {
+        fprintf(stderr, "SSL read error\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    return 0;
+}
+
+int remove_user(SSL_CTX *ctx, SSL *ssl, char *username, char *combined) {
+    char request[1024] = {0};
+    char response[1024] = {0};
+
+    char data[1024] = {0};
+    snprintf(data, sizeof(data), "username=%s", username);
+
+    snprintf(request, sizeof(request), "POST %smanagement/removeuser/ HTTP/1.1\r\n"
+                                        "Host: %s\r\n"
+                                        "Authorization: Basic %s\r\n"
+                                        "Content-Type: application/x-www-form-urlencoded\r\n"
+                                        "Content-Length: %d\r\n"
+                                        "\r\n"
+                                        "%s",
+                                        URL, SERVER_ADDR, combined,
+                                        (int)strlen(data), data);
 
     SSL_write(ssl, request, strlen(request));
     printf("Request sent:\n%s\n", request);
@@ -137,17 +237,12 @@ int main() {
     SSL *ssl;
     int sockfd;
     struct sockaddr_in serv_addr;
+    char user_groupname[100] = {0};
 
     SSL_library_init();
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
     ctx = SSL_CTX_new(SSLv23_client_method());
-
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Socket creation error");
-        SSL_CTX_free(ctx);
-        return -1;
-    }
 
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
@@ -159,23 +254,7 @@ int main() {
         return -1;
     }
 
-    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("Connection failed");
-        close(sockfd);
-        SSL_CTX_free(ctx);
-        return -1;
-    }
-
-    ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, sockfd);
-    if (SSL_connect(ssl) != 1) {
-        fprintf(stderr, "SSL connection error\n");
-        ERR_print_errors_fp(stderr);
-        SSL_free(ssl);
-        close(sockfd);
-        SSL_CTX_free(ctx);
-        return -1;
-    }
+    ssl = connect_ssl(ctx, &serv_addr);
 
     char username[100];
     char password[100];
@@ -195,8 +274,17 @@ int main() {
     }
 
     char *groupname = get_groupname(ctx, ssl, base64_encoded);
-    printf("Groupname: %s\n", groupname);
-    if (groupname != NULL && strcmp(groupname, "admin") == 0) {
+    if (groupname) {
+        strncpy(user_groupname, groupname, sizeof(user_groupname) - 1);
+        printf("Groupname: %s\n", user_groupname);
+    } else {
+        printf("Failed to fetch groupname\n");
+    }
+
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+
+    if (user_groupname != NULL && strcmp(user_groupname, "admin") == 0) {
         admin_menu();
         printf("1 : add user\n");
         printf("2 : modify user\n");
@@ -215,15 +303,49 @@ int main() {
             printf("Enter the groupname: ");
             scanf("%s", newGroupname);
 
-            add_user(ctx, ssl, newUsername, newPassword, newGroupname, base64_encoded);
+            char *hash_newPassword = hash_password(newPassword);
+
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            add_user(ctx, ssl, newUsername, hash_newPassword, newGroupname, base64_encoded);
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        }
+        else if (choice == 2){
+            char newusername[100];
+            char newgroupname[100];
+
+            printf("Enter the username: ");
+            scanf("%s", newusername);
+            printf("Enter the new groupname: ");
+            scanf("%s", newgroupname);
+
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            modify_user(ctx, ssl, newusername, newgroupname, base64_encoded);
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        }
+        else if (choice == 3){
+            char newusername[100];
+
+            printf("Enter the username: ");
+            scanf("%s", newusername);
+
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            remove_user(ctx, ssl, newusername, base64_encoded);
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
         }
     } else {
         printf("You do not have administrative privileges.\n");
     }
 
     free(base64_encoded);
-    SSL_free(ssl);
-    close(sockfd);
     SSL_CTX_free(ctx);
 
     return 0;

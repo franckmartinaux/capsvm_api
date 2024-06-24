@@ -50,7 +50,7 @@
 static char *db_path;
 
 static int open_sqlite_db(sqlite3 **db) {
-    int rc = sqlite3_open(db_path, db);
+    int rc = sqlite3_open_v2(db_path, db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
         const char *err_msg = sqlite3_errmsg(*db);
         const char *err_str = sqlite3_errstr(rc);
@@ -147,6 +147,7 @@ static int adduser_handler(request_rec *r) {
 
     apr_array_header_t *pairs;
     if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
+        close_sqlite_db(db);
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -157,13 +158,23 @@ static int adduser_handler(request_rec *r) {
     for (int i = 0; i < pairs->nelts; i++) {
         ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
         char *buffer = NULL;
-        apr_size_t size;
+        apr_off_t length; 
+
+        apr_brigade_length(pair->value, 1, &length);  
+
+        buffer = apr_palloc(r->pool, length + 1);
+        if (buffer == NULL) {
+            close_sqlite_db(db);
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        apr_size_t size = (apr_size_t)length;
 
         if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
             continue;
         }
 
-        buffer[size] = '\0';
+        buffer[size] = '\0'; 
 
         if (strcmp(pair->name, "username") == 0) {
             username = apr_pstrdup(r->pool, buffer);
@@ -182,34 +193,22 @@ static int adduser_handler(request_rec *r) {
     const char *sql = "INSERT INTO users (username, pw, groupname) VALUES (?, ?, ?)";
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare statement");
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare statement: %s", sqlite3_errmsg(db));
         close_sqlite_db(db);
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    if (sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text");
-        sqlite3_finalize(stmt);
-        close_sqlite_db(db);
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    if (sqlite3_bind_text(stmt, 2, password, -1, SQLITE_STATIC) != SQLITE_OK) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text");
-        sqlite3_finalize(stmt);
-        close_sqlite_db(db);
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    if (sqlite3_bind_text(stmt, 3, groupname, -1, SQLITE_STATIC) != SQLITE_OK) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text");
+    if (sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 2, password, -1, SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 3, groupname, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text: %s", sqlite3_errmsg(db));
         sqlite3_finalize(stmt);
         close_sqlite_db(db);
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to execute statement");
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to execute statement: %s", sqlite3_errmsg(db));
         sqlite3_finalize(stmt);
         close_sqlite_db(db);
         return HTTP_INTERNAL_SERVER_ERROR;
@@ -217,6 +216,207 @@ static int adduser_handler(request_rec *r) {
 
     ap_set_content_type(r, "text/plain");
     ap_rprintf(r, "User %s added in the database", username);
+
+    sqlite3_finalize(stmt);
+    close_sqlite_db(db);
+    return OK;
+}
+
+static int modifyuser_handler(request_rec *r) {
+    sqlite3 *db;
+    if (open_sqlite_db(&db) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    apr_array_header_t *pairs;
+    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    const char *username = NULL;
+    const char *groupname = NULL;
+
+    for (int i = 0; i < pairs->nelts; i++) {
+        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
+        char *buffer = NULL;
+        apr_off_t length;
+
+        apr_brigade_length(pair->value, 1, &length);
+
+        buffer = apr_palloc(r->pool, length + 1);
+        if (buffer == NULL) {
+            close_sqlite_db(db);
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        apr_size_t size = (apr_size_t)length;
+
+        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
+            continue;
+        }
+
+        buffer[size] = '\0';
+
+        if (strcmp(pair->name, "username") == 0) {
+            username = apr_pstrdup(r->pool, buffer);
+        } else if (strcmp(pair->name, "groupname") == 0) {
+            groupname = apr_pstrdup(r->pool, buffer);
+        }
+    }
+
+    if (username == NULL || groupname == NULL) {
+        close_sqlite_db(db);
+        return HTTP_BAD_REQUEST;
+    }
+
+    const char *check_sql = "SELECT 1 FROM users WHERE username = ?";
+    sqlite3_stmt *check_stmt;
+    if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare check statement: %s", sqlite3_errmsg(db));
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(check_stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text for check statement: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_step(check_stmt) != SQLITE_ROW) {
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "User %s does not exist in the database", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_NOT_FOUND;
+    }
+
+    const char *sql = "UPDATE users SET groupname = ? WHERE username = ?";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare statement: %s", sqlite3_errmsg(db));
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(stmt, 1, groupname, -1, SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 2, username, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to execute statement: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "User %s is now in the %s groupname", username, groupname);
+
+    sqlite3_finalize(stmt);
+    close_sqlite_db(db);
+    return OK;
+}
+
+
+static int deleteuser_handler(request_rec *r) {
+    sqlite3 *db;
+    if (open_sqlite_db(&db) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    apr_array_header_t *pairs;
+    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    const char *username = NULL;
+
+    for (int i = 0; i < pairs->nelts; i++) {
+        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
+        char *buffer = NULL;
+        apr_off_t length;
+
+        apr_brigade_length(pair->value, 1, &length);
+
+        buffer = apr_palloc(r->pool, length + 1);
+        if (buffer == NULL) {
+            close_sqlite_db(db);
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        apr_size_t size = (apr_size_t)length;
+
+        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
+            continue;
+        }
+
+        buffer[size] = '\0';
+
+        if (strcmp(pair->name, "username") == 0) {
+            username = apr_pstrdup(r->pool, buffer);
+        }
+    }
+
+    if (username == NULL) {
+        close_sqlite_db(db);
+        return HTTP_BAD_REQUEST;
+    }
+
+    const char *check_sql = "SELECT 1 FROM users WHERE username = ?";
+    sqlite3_stmt *check_stmt;
+    if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare check statement: %s", sqlite3_errmsg(db));
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(check_stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text for check statement: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_step(check_stmt) != SQLITE_ROW) {
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "User %s does not exist in the database", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_NOT_FOUND;
+    }
+
+    const char *sql = "DELETE FROM users WHERE username = ?";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare statement: %s", sqlite3_errmsg(db));
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to execute statement: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "User %s remove from the database", username);
 
     sqlite3_finalize(stmt);
     close_sqlite_db(db);
@@ -234,8 +434,12 @@ static int capsvm_handler(request_rec *r) {
 
     if (strcmp(r->uri, "/capsvm_api/getgroup/") == 0) {
         return getgroup_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/adduser/") == 0) {
+    } else if (strcmp(r->uri, "/capsvm_api/management/adduser/") == 0) {
         return adduser_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/management/modifyuser/") == 0) {
+        return modifyuser_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/management/removeuser/") == 0) {
+        return deleteuser_handler(r);
     } else {
         return HTTP_NOT_FOUND;
     }
