@@ -8,38 +8,31 @@ top_srcdir=/etc/httpd
 top_builddir=/usr/lib64/httpd
 include /usr/lib64/httpd/build/special.mk
 
-#   the used tools
 APACHECTL=apachectl
 
-#   additional defines, includes and libraries
-#DEFS=-Dmy_define=my_value
-#INCLUDES=-Imy/include/dir
-#LIBS=-Lmy/lib/dir -lmylib
+.PHONY: all libcapsvm capsvm_api clean restart
 
-#   the default target
-all: local-shared-build
+all: libcapsvm capsvm_api restart
 
-#   install the shared object file into Apache 
-install: install-modules-yes
+libcapsvm: libcapsvm.a
 
-#   cleanup
+libcapsvm.a: libcapsvm.o
+	ar rcs $@ $^
+
+libcapsvm.o: libcapsvm.c
+	gcc -fPIC -c -g -Wincompatible-pointer-types -Wno-discarded-qualifiers -o $@ $<
+
+capsvm_api: mod_capsvm_api.so
+
+mod_capsvm_api.so: mod_capsvm_api.c libcapsvm.a
+	apxs -c -i -I /usr/include -L /usr/lib64 -l sqlite3 -I /home/julien/capsvm_api -L /home/julien/capsvm_api -l capsvm -l config mod_capsvm_api.c
+	cp .libs/mod_capsvm_api.so /etc/httpd/modules/
+
+restart:
+	sudo systemctl restart httpd
+
 clean:
-	-rm -f mod_capsvm_api.o mod_capsvm_api.lo mod_capsvm_api.slo mod_capsvm_api.la 
+	rm -f *.o *.a *.so
 
-#   simple test
-test: reload
-	lynx -mime_header http://192.168.1.34/capsvm_api
-
-#   install and activate shared object by reloading Apache to
-#   force a reload of the shared object file
-reload: install restart
-
-#   the general Apache start/restart/stop
-#   procedures
-start:
-	$(APACHECTL) start
 restart:
 	$(APACHECTL) restart
-stop:
-	$(APACHECTL) stop
-

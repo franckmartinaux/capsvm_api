@@ -95,10 +95,6 @@ char* hash_password(const char *password) {
     return hashed_password;
 }
 
-void admin_menu() {
-    printf("Je suis administrateur let's go !\n");
-}
-
 char *get_groupname(SSL_CTX *ctx, SSL *ssl, char *combined) {
     char request[1024] = {0};
     char response[1024] = {0};
@@ -232,6 +228,39 @@ int remove_user(SSL_CTX *ctx, SSL *ssl, char *username, char *combined) {
     return 0;
 }
 
+int vm_start(SSL_CTX *ctx, SSL *ssl, char *uuid, char *combined) {
+    char request[1024] = {0};
+    char response[1024] = {0};
+
+    char data[1024] = {0};
+    snprintf(data, sizeof(data), "uuid=%s", uuid);
+
+    snprintf(request, sizeof(request), "POST %svm/startvm/ HTTP/1.1\r\n"
+                                        "Host: %s\r\n"
+                                        "Authorization: Basic %s\r\n"
+                                        "Content-Type: application/x-www-form-urlencoded\r\n"
+                                        "Content-Length: %d\r\n"
+                                        "\r\n"
+                                        "%s",
+                                        URL, SERVER_ADDR, combined,
+                                        (int)strlen(data), data);
+
+    SSL_write(ssl, request, strlen(request));
+    printf("Request sent:\n%s\n", request);
+
+    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
+    if (bytes > 0) {
+        response[bytes] = '\0';
+        printf("Response received:\n%s\n", response);
+    } else {
+        fprintf(stderr, "SSL read error\n");
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    return 0;
+}
+
 int main() {
     SSL_CTX *ctx;
     SSL *ssl;
@@ -285,10 +314,10 @@ int main() {
     SSL_free(ssl);
 
     if (user_groupname != NULL && strcmp(user_groupname, "admin") == 0) {
-        admin_menu();
         printf("1 : add user\n");
         printf("2 : modify user\n");
         printf("3 : delete user\n");
+        printf("4 : start vm\n");
         int choice;
         scanf("%d", &choice);
         if (choice == 1) {
@@ -337,6 +366,18 @@ int main() {
             ssl = connect_ssl(ctx, &serv_addr);
 
             remove_user(ctx, ssl, newusername, base64_encoded);
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        } else if(choice == 4) {
+            char uuid[64];
+
+            printf("Enter the UUID of the VM: ");
+            scanf("%s", uuid);
+
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            vm_start(ctx, ssl, uuid, base64_encoded);
 
             SSL_shutdown(ssl);
             SSL_free(ssl);

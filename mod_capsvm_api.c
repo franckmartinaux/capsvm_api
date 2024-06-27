@@ -46,6 +46,7 @@
 #include "mod_auth.h"
 #include "http_request.h"
 #include <crypt.h>
+//#include "libcapsvm.h"
 
 static char *db_path;
 
@@ -416,10 +417,52 @@ static int deleteuser_handler(request_rec *r) {
     }
 
     ap_set_content_type(r, "text/plain");
-    ap_rprintf(r, "User %s remove from the database", username);
+    ap_rprintf(r, "User %s has been removed from the database", username);
 
     sqlite3_finalize(stmt);
     close_sqlite_db(db);
+    return OK;
+}
+
+static int start_vm_handler(request_rec *r) {
+
+    apr_array_header_t *pairs;
+    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char *uuid = NULL;
+    char vm_uuid[64];
+    memset(&vm_uuid,0,sizeof(vm_uuid));
+    for (int i = 0; i < pairs->nelts; i++) {
+        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
+        char *buffer = NULL;
+        apr_off_t length;
+
+        apr_brigade_length(pair->value, 1, &length);
+
+        buffer = apr_palloc(r->pool, length + 1);
+        if (buffer == NULL) {
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        apr_size_t size = (apr_size_t)length;
+
+        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
+            continue;
+        }
+
+        buffer[size] = '\0';
+
+        if (strcmp(pair->name, "uuid") == 0) {
+            uuid = apr_pstrdup(r->pool, buffer);
+        }
+    }
+    strncpy(vm_uuid,uuid,strlen(uuid));
+    start_vm(vm_uuid);
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "VM started");
+
     return OK;
 }
 
@@ -431,7 +474,6 @@ static int capsvm_handler(request_rec *r) {
     if (r->method_number != M_POST) {
         return HTTP_METHOD_NOT_ALLOWED;
     }
-
     if (strcmp(r->uri, "/capsvm_api/getgroup/") == 0) {
         return getgroup_handler(r);
     } else if (strcmp(r->uri, "/capsvm_api/management/adduser/") == 0) {
@@ -440,7 +482,9 @@ static int capsvm_handler(request_rec *r) {
         return modifyuser_handler(r);
     } else if (strcmp(r->uri, "/capsvm_api/management/removeuser/") == 0) {
         return deleteuser_handler(r);
-    } else {
+    } else if (strcmp(r->uri, "/capsvm_api/vm/startvm/") == 0) {
+        return start_vm_handler(r);
+    }else {
         return HTTP_NOT_FOUND;
     }
 
