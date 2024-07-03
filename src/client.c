@@ -129,12 +129,12 @@ char *get_groupname(SSL_CTX *ctx, SSL *ssl, char *combined) {
     return pos;
 }
 
-int add_user(SSL_CTX *ctx, SSL *ssl, char *newUsername, char *newPassword, char *newGroupname, char *combined) {
+int add_user(SSL_CTX *ctx, SSL *ssl, char *new_Username, char *new_password, char *new_Groupname, char *combined) {
     char request[1024] = {0};
     char response[1024] = {0};
 
     char data[1024] = {0};
-    snprintf(data, sizeof(data), "username=%s&password=%s&groupname=%s", newUsername, newPassword, newGroupname);
+    snprintf(data, sizeof(data), "username=%s&password=%s&groupname=%s", new_Username, new_password, new_Groupname);
 
     snprintf(request, sizeof(request), "POST %smanagement/adduser/ HTTP/1.1\r\n"
                                         "Host: %s\r\n"
@@ -162,12 +162,12 @@ int add_user(SSL_CTX *ctx, SSL *ssl, char *newUsername, char *newPassword, char 
     return 0;
 }
 
-int modify_user(SSL_CTX *ctx, SSL *ssl, char *username, char *newgroupname, char *combined) {
+int modify_user(SSL_CTX *ctx, SSL *ssl, char *username, char *new_groupname, char *combined) {
     char request[1024] = {0};
     char response[1024] = {0};
 
     char data[1024] = {0};
-    snprintf(data, sizeof(data), "username=%s&groupname=%s", username, newgroupname);
+    snprintf(data, sizeof(data), "username=%s&groupname=%s", username, new_groupname);
 
     snprintf(request, sizeof(request), "POST %smanagement/modifyuser/ HTTP/1.1\r\n"
                                         "Host: %s\r\n"
@@ -307,7 +307,7 @@ int main() {
     char *groupname = get_groupname(ctx, ssl, base64_encoded);
     if (groupname) {
         strncpy(user_groupname, groupname, sizeof(user_groupname) - 1);
-        printf("Groupname: %s\n", user_groupname);
+        printf("Group name: %s\n", user_groupname);
     } else {
         printf("Failed to fetch groupname\n");
     }
@@ -328,51 +328,51 @@ int main() {
         int choice;
         scanf("%d", &choice);
         if (choice == 1) {
-            char newUsername[100];
-            char newPassword[100];
-            char newGroupname[100];
+            char new_Username[100];
+            char new_password[100];
+            char new_Groupname[100];
 
             printf("Enter the username: ");
-            scanf("%s", newUsername);
+            scanf("%s", new_Username);
             printf("Enter the password: ");
-            scanf("%s", newPassword);
+            scanf("%s", new_password);
             printf("Enter the groupname: ");
-            scanf("%s", newGroupname);
+            scanf("%s", new_Groupname);
 
-            char *hash_newPassword = hash_password(newPassword);
+            char *hash_newPassword = hash_password(new_password);
 
             ssl = connect_ssl(ctx, &serv_addr);
 
-            add_user(ctx, ssl, newUsername, hash_newPassword, newGroupname, base64_encoded);
+            add_user(ctx, ssl, new_Username, hash_newPassword, new_Groupname, base64_encoded);
 
             SSL_shutdown(ssl);
             SSL_free(ssl);
         }
         else if (choice == 2){
-            char newusername[100];
-            char newgroupname[100];
+            char new_username[100];
+            char new_groupname[100];
 
             printf("Enter the username: ");
-            scanf("%s", newusername);
+            scanf("%s", new_username);
             printf("Enter the new groupname: ");
-            scanf("%s", newgroupname);
+            scanf("%s", new_groupname);
 
             ssl = connect_ssl(ctx, &serv_addr);
 
-            modify_user(ctx, ssl, newusername, newgroupname, base64_encoded);
+            modify_user(ctx, ssl, new_username, new_groupname, base64_encoded);
 
             SSL_shutdown(ssl);
             SSL_free(ssl);
         }
         else if (choice == 3){
-            char newusername[100];
+            char new_username[100];
 
             printf("Enter the username: ");
-            scanf("%s", newusername);
+            scanf("%s", new_username);
 
             ssl = connect_ssl(ctx, &serv_addr);
 
-            remove_user(ctx, ssl, newusername, base64_encoded);
+            remove_user(ctx, ssl, new_username, base64_encoded);
 
             SSL_shutdown(ssl);
             SSL_free(ssl);
