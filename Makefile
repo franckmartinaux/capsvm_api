@@ -14,25 +14,18 @@ APACHECTL=apachectl
 
 all: libcapsvm capsvm_api restart
 
-libcapsvm: libcapsvm.a
-
-libcapsvm.a: libcapsvm.o
-	ar rcs $@ $^
-
-libcapsvm.o: libcapsvm.c
-	gcc -fPIC -c -g -Wincompatible-pointer-types -Wno-discarded-qualifiers -o $@ $<
+libcapsvm:
+	gcc -c -fPIC -Wincompatible-pointer-types -Wno-discarded-qualifiers -o libcapsvm.o libcapsvm.c
+	ar rcs libcapsvm.a libcapsvm.o
 
 capsvm_api: mod_capsvm_api.so
 
 mod_capsvm_api.so: mod_capsvm_api.c libcapsvm.a
-	apxs -c -i -I /usr/include -L /usr/lib64 -l sqlite3 -I /home/julien/capsvm_api -L /home/julien/capsvm_api -l capsvm -l config mod_capsvm_api.c
+	apxs -c -i -Wc,-g -I /usr/include -I /home/julien/capsvm_api -L /usr/lib64 -L /home/julien/capsvm_api -l sqlite3 -l capsvm -l config mod_capsvm_api.c
 	cp .libs/mod_capsvm_api.so /etc/httpd/modules/
 
 restart:
 	sudo systemctl restart httpd
 
 clean:
-	rm -f *.o *.a *.so
-
-restart:
-	$(APACHECTL) restart
+	rm -rf *.o .libs *.la *.lo *.slo

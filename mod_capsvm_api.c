@@ -46,7 +46,6 @@
 #include "mod_auth.h"
 #include "http_request.h"
 #include <crypt.h>
-//#include "libcapsvm.h"
 
 static char *db_path;
 
@@ -125,6 +124,12 @@ static authn_status capsvm_check_password(request_rec *r, const char *user, cons
 
     sqlite3_finalize(stmt);
     close_sqlite_db(db);
+
+    create_all_taps();
+    read_common_config();
+    read_all_vm_config();
+    orderstart();
+    autostart();
     return AUTH_GRANTED;
 }
 
@@ -424,45 +429,185 @@ static int deleteuser_handler(request_rec *r) {
     return OK;
 }
 
-static int start_vm_handler(request_rec *r) {
-
+static int parseUUID(request_rec *r, char **uuid) {
     apr_array_header_t *pairs;
     if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to parse form data");
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    char *uuid = NULL;
-    char vm_uuid[64];
-    memset(&vm_uuid,0,sizeof(vm_uuid));
     for (int i = 0; i < pairs->nelts; i++) {
         ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
         char *buffer = NULL;
         apr_off_t length;
 
         apr_brigade_length(pair->value, 1, &length);
-
         buffer = apr_palloc(r->pool, length + 1);
+
         if (buffer == NULL) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to allocate memory");
             return HTTP_INTERNAL_SERVER_ERROR;
         }
 
         apr_size_t size = (apr_size_t)length;
-
         if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
+            ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to flatten brigade");
             continue;
         }
 
         buffer[size] = '\0';
 
         if (strcmp(pair->name, "uuid") == 0) {
-            uuid = apr_pstrdup(r->pool, buffer);
+            *uuid = apr_pstrdup(r->pool, buffer);
+            if (*uuid == NULL) {
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to duplicate UUID string");
+                return HTTP_INTERNAL_SERVER_ERROR;
+            }
+            break;
         }
     }
-    strncpy(vm_uuid,uuid,strlen(uuid));
-    start_vm(vm_uuid);
-    ap_set_content_type(r, "text/plain");
-    ap_rprintf(r, "VM started");
 
+    if (*uuid == NULL) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "UUID not found in form data");
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    return OK;
+}
+
+static int start_vm_handler(request_rec *r) {
+
+    char *uuid = NULL;
+    if (parseUUID(r, &uuid) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    free(uuid);
+
+    ap_set_content_type(r, "text/plain");
+    if (find_pid(vm_uuid) > 0) {
+        ap_rprintf("start_vm (%s) VM is already running, abord command\n",vm_uuid);
+	} else {
+        start_vm(vm_uuid);
+        ap_rprintf(r, "VM started");
+    }
+
+    return OK;
+}
+
+// fonctionnel
+static int stop_vm_handler(request_rec *r) {
+    char *uuid = NULL;
+    if (parseUUID(r, &uuid) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    free(uuid);
+
+    ap_set_content_type(r, "text/plain");
+    if(find_pid(vm_uuid) == -1) {
+        ap_rprintf(r, "VM already stopped");
+    } else {
+        stop_vm(vm_uuid);
+        ap_rprintf(r, "VM stopped");
+    }
+
+    return OK;
+}
+
+// fonctionnel
+static int forcestop_vm_handler(request_rec *r) {
+    char *uuid = NULL;
+    if (parseUUID(r, &uuid) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    free(uuid);
+
+    ap_set_content_type(r, "text/plain");
+
+    if (find_pid(vm_uuid) == -1){
+        ap_rprintf(r, "VM already stopped");
+    } else {
+        forcestop_vm(vm_uuid);
+        ap_rprintf(r, "VM stopped");
+    }
+
+    return OK;
+}
+
+// fonctionnel
+static int reset_vm_handler(request_rec *r) {
+    char *uuid = NULL;
+    if(parseUUID(r, &uuid) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    free(uuid);
+
+    ap_set_content_type(r, "text/plain");
+
+    if (find_pid(vm_uuid) == -1){
+        ap_rprintf(r, "VM not running");
+    } else {
+        reset_vm(vm_uuid);
+        ap_rprintf(r, "VM reset");
+    }
+
+    return OK;
+}
+
+// fonctionnel
+static int status_vm_handler(request_rec *r) {
+    char *uuid = NULL;
+    if(parseUUID(r, &uuid) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    free(uuid);
+
+    ap_set_content_type(r, "text/plain");
+	if (find_pid(vm_uuid) >0) {
+        ap_rprintf(r, "VM %s is running", vm_uuid);
+    } else {
+        ap_rprintf(r, "VM %s is not running", vm_uuid);
+	}
+
+    return OK;
+}
+
+static int statusall_vm_handler(request_rec *r) {
+
+    char *status = status_vm();
+    if (status == NULL) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    syslog(LOG_INFO, "statusall_vm_handler: %s", status);
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "%s", status);
+
+    free(status);
     return OK;
 }
 
@@ -484,7 +629,17 @@ static int capsvm_handler(request_rec *r) {
         return deleteuser_handler(r);
     } else if (strcmp(r->uri, "/capsvm_api/vm/startvm/") == 0) {
         return start_vm_handler(r);
-    }else {
+    } else if (strcmp(r->uri, "/capsvm_api/vm/stopvm/") == 0) {
+        return stop_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/forcestopvm/") == 0) {
+        return forcestop_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/resetvm/") == 0) {
+        return reset_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/statusvm/") == 0) {
+        return status_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/statusallvm/") == 0) {
+        return statusall_vm_handler(r);
+    } else {
         return HTTP_NOT_FOUND;
     }
 

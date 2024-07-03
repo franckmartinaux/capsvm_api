@@ -11,7 +11,7 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 
-#define SERVER_ADDR "192.168.1.34"
+#define SERVER_ADDR "192.168.1.19"
 #define PORT 443
 #define URL "/capsvm_api/"
 
@@ -228,21 +228,22 @@ int remove_user(SSL_CTX *ctx, SSL *ssl, char *username, char *combined) {
     return 0;
 }
 
-int vm_start(SSL_CTX *ctx, SSL *ssl, char *uuid, char *combined) {
+
+int send_request(SSL_CTX *ctx, SSL *ssl, char* uuid, char* combined, char* req){
     char request[1024] = {0};
     char response[1024] = {0};
 
     char data[1024] = {0};
     snprintf(data, sizeof(data), "uuid=%s", uuid);
 
-    snprintf(request, sizeof(request), "POST %svm/startvm/ HTTP/1.1\r\n"
+    snprintf(request, sizeof(request), "POST %svm/%s/ HTTP/1.1\r\n"
                                         "Host: %s\r\n"
                                         "Authorization: Basic %s\r\n"
                                         "Content-Type: application/x-www-form-urlencoded\r\n"
                                         "Content-Length: %d\r\n"
                                         "\r\n"
                                         "%s",
-                                        URL, SERVER_ADDR, combined,
+                                        URL, req, SERVER_ADDR, combined,
                                         (int)strlen(data), data);
 
     SSL_write(ssl, request, strlen(request));
@@ -260,6 +261,7 @@ int vm_start(SSL_CTX *ctx, SSL *ssl, char *uuid, char *combined) {
 
     return 0;
 }
+
 
 int main() {
     SSL_CTX *ctx;
@@ -318,6 +320,11 @@ int main() {
         printf("2 : modify user\n");
         printf("3 : delete user\n");
         printf("4 : start vm\n");
+        printf("5 : stop vm\n");
+        printf("6 : forcestop vm\n");
+        printf("7 : reset vm\n");
+        printf("8 : status\n");
+        printf("9 : statusall\n");
         int choice;
         scanf("%d", &choice);
         if (choice == 1) {
@@ -374,10 +381,71 @@ int main() {
 
             printf("Enter the UUID of the VM: ");
             scanf("%s", uuid);
-
+            
             ssl = connect_ssl(ctx, &serv_addr);
 
-            vm_start(ctx, ssl, uuid, base64_encoded);
+            send_request(ctx, ssl, uuid, base64_encoded, "startvm");
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+
+        }
+        else if(choice == 5) {
+            char uuid[64];
+
+            printf("Enter the UUID of the VM: ");
+            scanf("%s", uuid);
+            
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            send_request(ctx, ssl, uuid, base64_encoded, "stopvm");
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        }
+        else if(choice == 6) {
+            char uuid[64];
+
+            printf("Enter the UUID of the VM: ");
+            scanf("%s", uuid);
+            
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            send_request(ctx, ssl, uuid, base64_encoded, "forcestopvm");
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        }
+        else if(choice == 7) {
+            char uuid[64];
+
+            printf("Enter the UUID of the VM: ");
+            scanf("%s", uuid);
+            
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            send_request(ctx, ssl, uuid, base64_encoded, "resetvm");
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        }
+        else if(choice == 8) {
+            char uuid[64];
+
+            printf("Enter the UUID of the VM: ");
+            scanf("%s", uuid);
+            
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            send_request(ctx, ssl, uuid, base64_encoded, "statusvm");
+
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        }
+        else if(choice == 9) {
+            ssl = connect_ssl(ctx, &serv_addr);
+
+            send_request(ctx, ssl, "test", base64_encoded, "statusallvm");
 
             SSL_shutdown(ssl);
             SSL_free(ssl);
