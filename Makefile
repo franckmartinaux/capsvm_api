@@ -12,11 +12,7 @@ APACHECTL=apachectl
 
 .PHONY: all libcapsvm capsvm_api clean restart
 
-all: libcapsvm capsvm_api restart
-
-libcapsvm:
-	gcc -c -fPIC -Wincompatible-pointer-types -Wno-discarded-qualifiers -o libcapsvm.o libcapsvm.c
-	ar rcs libcapsvm.a libcapsvm.o
+all: capsvm_api restart
 
 capsvm_api: mod_capsvm_api.so
 

@@ -47,7 +47,30 @@
 #include "http_request.h"
 #include <crypt.h>
 
+#define VERSION "2.7"
+
 static char *db_path;
+extern char* status_vm();
+extern char* vm_retcode(char *uuid);
+extern char* get_uuid_short(char *uuid);
+extern char* get_vm_short_list();
+extern int ejectcd(char *uuid);
+extern int status_vm_fo();
+extern int check_role();
+extern int start_all_vm_fo();
+extern int stop_all_vm_fo();
+extern int screendump_vm(char *uuid);
+extern int forcestop_vm(char *uuid);
+extern int stop_vm(char *uuid);
+extern int start_vm(char *uuid);
+extern int reset_vm(char *uuid);
+extern int find_pid(char *uuid);
+extern int read_all_vm_config();
+extern int read_common_config();
+extern int get_vm_index(char *uuid);
+extern int orderstart();
+extern int autostart();
+extern int create_all_taps();
 
 static int open_sqlite_db(sqlite3 **db) {
     int rc = sqlite3_open_v2(db_path, db, SQLITE_OPEN_READWRITE, NULL);
@@ -193,7 +216,9 @@ static int adduser_handler(request_rec *r) {
 
     if (username == NULL || password == NULL || groupname == NULL) {
         close_sqlite_db(db);
-        return HTTP_BAD_REQUEST;
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "Missing username, password or groupname");
+        return OK;
     }
 
     const char *sql = "INSERT INTO users (username, pw, groupname) VALUES (?, ?, ?)";
@@ -276,8 +301,9 @@ static int modifyuser_handler(request_rec *r) {
         return HTTP_BAD_REQUEST;
     }
 
-    const char *check_sql = "SELECT 1 FROM users WHERE username = ?";
+    const char *check_sql = "SELECT groupname FROM users WHERE username = ?";
     sqlite3_stmt *check_stmt;
+
     if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0) != SQLITE_OK) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare check statement: %s", sqlite3_errmsg(db));
         close_sqlite_db(db);
@@ -296,8 +322,34 @@ static int modifyuser_handler(request_rec *r) {
         ap_rprintf(r, "User %s does not exist in the database", username);
         sqlite3_finalize(check_stmt);
         close_sqlite_db(db);
-        return HTTP_NOT_FOUND;
+        return OK;
     }
+
+    const unsigned char *db_groupname = sqlite3_column_text(check_stmt, 0);
+    if (db_groupname == NULL) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to get groupname for user: %s", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (strcmp((const char *)db_groupname, groupname) == 0) {
+        syslog(LOG_INFO, "modifyuser (%s) user already in group %s", username, groupname);
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "User %s is already in the %s groupname", username, groupname);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return OK;
+    } else if (strcmp((const char *)db_groupname, "admin") == 0) {
+        syslog(LOG_INFO, "modifyuser (%s) user in admin groupname, cannot modify", username);
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "User %s is in the admin groupname, cannot modify", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return OK;
+    }
+
+    sqlite3_finalize(check_stmt);
 
     const char *sql = "UPDATE users SET groupname = ? WHERE username = ?";
     sqlite3_stmt *stmt;
@@ -344,7 +396,6 @@ static int deleteuser_handler(request_rec *r) {
     }
 
     const char *username = NULL;
-
     for (int i = 0; i < pairs->nelts; i++) {
         ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
         char *buffer = NULL;
@@ -376,8 +427,9 @@ static int deleteuser_handler(request_rec *r) {
         return HTTP_BAD_REQUEST;
     }
 
-    const char *check_sql = "SELECT 1 FROM users WHERE username = ?";
+    const char *check_sql = "SELECT groupname FROM users WHERE username = ?";
     sqlite3_stmt *check_stmt;
+
     if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0) != SQLITE_OK) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare check statement: %s", sqlite3_errmsg(db));
         close_sqlite_db(db);
@@ -396,8 +448,27 @@ static int deleteuser_handler(request_rec *r) {
         ap_rprintf(r, "User %s does not exist in the database", username);
         sqlite3_finalize(check_stmt);
         close_sqlite_db(db);
-        return HTTP_NOT_FOUND;
+        return OK;
     }
+
+    const unsigned char *db_groupname = sqlite3_column_text(check_stmt, 0);
+    if (db_groupname == NULL) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to get groupname for user: %s", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (strcmp((const char *)db_groupname, "admin") == 0) {
+        syslog(LOG_INFO, "deleteuser (%s) user in admin groupname, cannot delete", username);
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "User %s is in the admin groupname, cannot delete", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return OK;
+    }
+
+    sqlite3_finalize(check_stmt);
 
     const char *sql = "DELETE FROM users WHERE username = ?";
     sqlite3_stmt *stmt;
@@ -420,7 +491,7 @@ static int deleteuser_handler(request_rec *r) {
         close_sqlite_db(db);
         return HTTP_INTERNAL_SERVER_ERROR;
     }
-
+    
     ap_set_content_type(r, "text/plain");
     ap_rprintf(r, "User %s has been removed from the database", username);
 
@@ -429,7 +500,7 @@ static int deleteuser_handler(request_rec *r) {
     return OK;
 }
 
-static int parseUUID(request_rec *r, char **uuid) {
+static int parse_short_name(request_rec *r, char **uuid) {
     apr_array_header_t *pairs;
     if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to parse form data");
@@ -457,7 +528,7 @@ static int parseUUID(request_rec *r, char **uuid) {
 
         buffer[size] = '\0';
 
-        if (strcmp(pair->name, "uuid") == 0) {
+        if (strcmp(pair->name, "short_name") == 0) {
             *uuid = apr_pstrdup(r->pool, buffer);
             if (*uuid == NULL) {
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to duplicate UUID string");
@@ -477,21 +548,23 @@ static int parseUUID(request_rec *r, char **uuid) {
 
 static int start_vm_handler(request_rec *r) {
 
-    char *uuid = NULL;
-    if (parseUUID(r, &uuid) != OK) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
     memset(vm_uuid, 0, sizeof(vm_uuid));
     snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
-
-    free(uuid);
-
+    syslog(LOG_INFO, "start_vm (%s) called",short_name);
     ap_set_content_type(r, "text/plain");
-    if (find_pid(vm_uuid) > 0) {
-        ap_rprintf("start_vm (%s) VM is already running, abord command\n",vm_uuid);
-	} else {
+    if (get_vm_index(vm_uuid) == -1) {
+        ap_rprintf(r, "start_vm (%s) VM does not exist\n", short_name);
+    } else if (find_pid(vm_uuid) > 0) {
+        ap_rprintf(r, "start_vm (%s) VM is already running, abort command\n", vm_uuid);
+    } else {
+        syslog(LOG_INFO, "start_vm (%s) VM started",short_name);
         start_vm(vm_uuid);
         ap_rprintf(r, "VM started");
     }
@@ -499,98 +572,95 @@ static int start_vm_handler(request_rec *r) {
     return OK;
 }
 
-// fonctionnel
 static int stop_vm_handler(request_rec *r) {
-    char *uuid = NULL;
-    if (parseUUID(r, &uuid) != OK) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
     memset(vm_uuid, 0, sizeof(vm_uuid));
     snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
 
-    free(uuid);
-
     ap_set_content_type(r, "text/plain");
-    if(find_pid(vm_uuid) == -1) {
-        ap_rprintf(r, "VM already stopped");
+    if (get_vm_index(vm_uuid) == -1){
+        ap_rprintf(r, "stop_vm (%s) VM does not exist\n", short_name);
+    } else if(find_pid(vm_uuid) == -1) {
+        ap_rprintf(r, "stop_vm (%s) VM already stopped, abort command\n", short_name);
     } else {
         stop_vm(vm_uuid);
-        ap_rprintf(r, "VM stopped");
+        ap_rprintf(r, "VM %s stopped", short_name);
     }
 
     return OK;
 }
 
-// fonctionnel
 static int forcestop_vm_handler(request_rec *r) {
-    char *uuid = NULL;
-    if (parseUUID(r, &uuid) != OK) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
     memset(vm_uuid, 0, sizeof(vm_uuid));
     snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
 
-    free(uuid);
-
     ap_set_content_type(r, "text/plain");
-
-    if (find_pid(vm_uuid) == -1){
-        ap_rprintf(r, "VM already stopped");
+    if (get_vm_index(vm_uuid) == -1){
+        ap_rprintf(r, "forcestop_vm (%s) VM does not exist\n", short_name);
+    } else if (find_pid(vm_uuid) == -1){
+        ap_rprintf(r, "forcestop_vm (%s) VM already stopped, abort command\n", short_name);
     } else {
         forcestop_vm(vm_uuid);
-        ap_rprintf(r, "VM stopped");
+        ap_rprintf(r, "VM %s stopped", short_name);
     }
 
     return OK;
 }
 
-// fonctionnel
 static int reset_vm_handler(request_rec *r) {
-    char *uuid = NULL;
-    if(parseUUID(r, &uuid) != OK) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
     memset(vm_uuid, 0, sizeof(vm_uuid));
     snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
 
-    free(uuid);
-
     ap_set_content_type(r, "text/plain");
 
-    if (find_pid(vm_uuid) == -1){
-        ap_rprintf(r, "VM not running");
+    if (get_vm_index(vm_uuid) == -1){
+        ap_rprintf(r, "reset_vm (%s) VM does not exists, abort command\n", short_name);
     } else {
         reset_vm(vm_uuid);
-        ap_rprintf(r, "VM reset");
+        ap_rprintf(r, "VM %s reset", short_name);
     }
 
     return OK;
 }
 
-// fonctionnel
 static int status_vm_handler(request_rec *r) {
-    char *uuid = NULL;
-    if(parseUUID(r, &uuid) != OK) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
     char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
     memset(vm_uuid, 0, sizeof(vm_uuid));
     snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
 
-    free(uuid);
-
     ap_set_content_type(r, "text/plain");
-	if (find_pid(vm_uuid) >0) {
-        ap_rprintf(r, "VM %s is running", vm_uuid);
+    if (get_vm_index(vm_uuid) == -1){
+        ap_rprintf(r, "VM %s does not exist", short_name);
+    } else if (find_pid(vm_uuid) >0) {
+        ap_rprintf(r, "VM %s is running", short_name);
     } else {
-        ap_rprintf(r, "VM %s is not running", vm_uuid);
+        ap_rprintf(r, "VM %s is not running", short_name);
 	}
 
     return OK;
@@ -599,15 +669,148 @@ static int status_vm_handler(request_rec *r) {
 static int statusall_vm_handler(request_rec *r) {
 
     char *status = status_vm();
+    
     if (status == NULL) {
         return HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    syslog(LOG_INFO, "statusall_vm_handler: %s", status);
     ap_set_content_type(r, "text/plain");
     ap_rprintf(r, "%s", status);
+    return OK;
 
-    free(status);
+}
+
+static int gencode_vm_handler(request_rec *r) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    ap_set_content_type(r, "text/plain");
+    if (vm_retcode(vm_uuid) != NULL){
+        ap_rprintf(r, "VM retcode : %s", vm_retcode(vm_uuid));
+    } else {
+        ap_rprintf(r, "VM %s does not exist\n", short_name);
+    }
+
+    return OK;
+}
+
+static int get_uuid_short_vm_handler(request_rec *r) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    ap_set_content_type(r, "text/plain");
+    if (get_vm_index(vm_uuid) == -1){
+        ap_rprintf(r, "The VM does not exists\n");
+    } else {
+        ap_rprintf(r, "%s", get_uuid_short(vm_uuid));
+    }
+
+    return OK;
+}
+
+static int version_handler(request_rec *r) {
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "capsvm_api version %s\n", VERSION);
+    return OK;
+}
+
+static int screendump_vm_handler(request_rec *r) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    ap_set_content_type(r, "text/plain");
+    if (screendump_vm(vm_uuid) == -1){
+        ap_rprintf(r, "The VM does not exists\n");
+    } else {
+        ap_rprintf(r, "VM %s screendump\n", short_name);
+    }
+
+    return OK;
+}
+
+static int start_all_vm_fo_handler(request_rec *r) {
+    ap_set_content_type(r, "text/plain");
+    start_all_vm_fo();
+    ap_rprintf(r, "All FO VM started\n");
+    return OK;
+}
+
+static int stop_all_vm_fo_handler(request_rec *r) {
+
+    ap_set_content_type(r, "text/plain");
+    stop_all_vm_fo();
+    ap_rprintf(r, "All FO VM stopped\n");
+
+    return OK;
+}
+
+static int check_role_handler(request_rec *r) {
+
+    ap_set_content_type(r, "text/plain");
+    if(check_role() == -1 ) {
+        ap_rprintf(r, "Check_role() role read failed\n");
+    } else {
+        ap_rprintf(r, "Check_role() role read is %d\n", check_role());
+    }
+
+    return OK;
+}
+
+static int status_vm_fo_handler(request_rec *r) {
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "%d VM running in failover mode\n", status_vm_fo());
+
+    return OK;
+}
+
+static int get_vm_short_list_handler(request_rec *r) {
+
+    ap_set_content_type(r, "text/plain");
+    ap_rprintf(r, "%s", get_vm_short_list());
+
+    return OK;
+}
+
+static int ejectcd_handler(request_rec *r) {
+    char *short_name = NULL;
+    if (parse_short_name(r, &short_name) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char vm_uuid[64];
+    char *uuid = get_uuid_short(short_name);
+    memset(vm_uuid, 0, sizeof(vm_uuid));
+    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+
+    ap_set_content_type(r, "text/plain");
+    if (ejectcd(vm_uuid) == -1){
+        ap_rprintf(r, "The VM does not exists\n");
+    } else {
+        ap_rprintf(r, "ejectcd(%s) sending eject command to VM console\n", short_name);
+    }
+
     return OK;
 }
 
@@ -639,6 +842,26 @@ static int capsvm_handler(request_rec *r) {
         return status_vm_handler(r);
     } else if (strcmp(r->uri, "/capsvm_api/vm/statusallvm/") == 0) {
         return statusall_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/gencodevm/") == 0) {
+        return gencode_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/getuuidshortvm/") == 0) {
+        return get_uuid_short_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/version/") == 0) {
+        return version_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/screendumpvm/") == 0) {
+        return screendump_vm_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/startallvmfo/") == 0) {
+        return start_all_vm_fo_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/stopallvmfo/") == 0) {
+        return stop_all_vm_fo_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/checkrole/") == 0) {
+        return check_role_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/statusvmfo/") == 0) {
+        return status_vm_fo_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/getvmshortlist/") == 0) {
+        return get_vm_short_list_handler(r);
+    } else if (strcmp(r->uri, "/capsvm_api/vm/ejectcd/") == 0) {
+        return ejectcd_handler(r);
     } else {
         return HTTP_NOT_FOUND;
     }

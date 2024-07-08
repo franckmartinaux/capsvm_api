@@ -10,10 +10,29 @@
 #include <openssl/err.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
+#include <readline/readline.h>
+#include <readline/history.h>
+#include <termios.h>
+#include <syslog.h>
 
 #define SERVER_ADDR "192.168.1.19"
 #define PORT 443
 #define URL "/capsvm_api/"
+#define VERSION "2.1"
+#define LIMIT 256
+#define MAXLINE 1024
+#define TRUE 1
+
+void splashScreen(){
+        printf("\n\t================================================================\n");
+        printf("\t          CAPSVMAPI - Application Programming Interface\n");
+        printf("\t----------------------------------------------------------------\n");
+        printf("\t          (c) 2020-2024 Capsule Technologies France SAS.\n");
+        printf("\t          (c) 2019 Capsule Technologies (Pty) Ltd.\n");
+        printf("\t================================================================\n");
+		printf("\tVersion - %s \n\n",VERSION);
+        printf("\tUse help for help, exit to quit\n\n");
+}
 
 SSL* connect_ssl(SSL_CTX *ctx, struct sockaddr_in *serv_addr) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -108,13 +127,11 @@ char *get_groupname(SSL_CTX *ctx, SSL *ssl, char *combined) {
                                     URL, SERVER_ADDR, combined);
 
     SSL_write(ssl, request, strlen(request));
-    printf("Request sent:\n%s\n", request);
 
     int bytes = SSL_read(ssl, response, sizeof(response) - 1);
     char *pos = NULL;
     if (bytes > 0) {
         response[bytes] = '\0';
-        printf("Response received:\n%s\n", response);
 
         pos = strstr(response, "\r\n\r\n");
         if (pos) {
@@ -147,12 +164,16 @@ int add_user(SSL_CTX *ctx, SSL *ssl, char *new_Username, char *new_password, cha
                                         (int)strlen(data), data);
 
     SSL_write(ssl, request, strlen(request));
-    printf("Request sent:\n%s\n", request);
 
     int bytes = SSL_read(ssl, response, sizeof(response) - 1);
     if (bytes > 0) {
         response[bytes] = '\0';
-        printf("Response received:\n%s\n", response);
+
+        char *body = strstr(response, "\r\n\r\n");
+        if (body) {
+            body += 4;
+            printf("\n%s\n", body);
+        }
     } else {
         fprintf(stderr, "SSL read error\n");
         ERR_print_errors_fp(stderr);
@@ -180,12 +201,16 @@ int modify_user(SSL_CTX *ctx, SSL *ssl, char *username, char *new_groupname, cha
                                         (int)strlen(data), data);
 
     SSL_write(ssl, request, strlen(request));
-    printf("Request sent:\n%s\n", request);
 
     int bytes = SSL_read(ssl, response, sizeof(response) - 1);
     if (bytes > 0) {
         response[bytes] = '\0';
-        printf("Response received:\n%s\n", response);
+
+        char *body = strstr(response, "\r\n\r\n");
+        if (body) {
+            body += 4;
+            printf("\n%s\n", body);
+        }
     } else {
         fprintf(stderr, "SSL read error\n");
         ERR_print_errors_fp(stderr);
@@ -213,12 +238,16 @@ int remove_user(SSL_CTX *ctx, SSL *ssl, char *username, char *combined) {
                                         (int)strlen(data), data);
 
     SSL_write(ssl, request, strlen(request));
-    printf("Request sent:\n%s\n", request);
 
     int bytes = SSL_read(ssl, response, sizeof(response) - 1);
     if (bytes > 0) {
         response[bytes] = '\0';
-        printf("Response received:\n%s\n", response);
+
+        char *body = strstr(response, "\r\n\r\n");
+        if (body) {
+            body += 4;
+            printf("\n%s\n", body);
+        }
     } else {
         fprintf(stderr, "SSL read error\n");
         ERR_print_errors_fp(stderr);
@@ -229,30 +258,34 @@ int remove_user(SSL_CTX *ctx, SSL *ssl, char *username, char *combined) {
 }
 
 
-int send_request(SSL_CTX *ctx, SSL *ssl, char* uuid, char* combined, char* req){
+int send_request(SSL_CTX *ctx, SSL *ssl, char* shortname, char* combined, char* d, char* req){
     char request[1024] = {0};
-    char response[1024] = {0};
+    char response[4096] = {0};
 
     char data[1024] = {0};
-    snprintf(data, sizeof(data), "uuid=%s", uuid);
+    snprintf(data, sizeof(data), "short_name=%s", shortname);
 
-    snprintf(request, sizeof(request), "POST %svm/%s/ HTTP/1.1\r\n"
+    snprintf(request, sizeof(request), "POST %s%s%s/ HTTP/1.1\r\n"
                                         "Host: %s\r\n"
                                         "Authorization: Basic %s\r\n"
                                         "Content-Type: application/x-www-form-urlencoded\r\n"
                                         "Content-Length: %d\r\n"
                                         "\r\n"
                                         "%s",
-                                        URL, req, SERVER_ADDR, combined,
+                                        URL, d, req, SERVER_ADDR, combined,
                                         (int)strlen(data), data);
 
     SSL_write(ssl, request, strlen(request));
-    printf("Request sent:\n%s\n", request);
 
     int bytes = SSL_read(ssl, response, sizeof(response) - 1);
     if (bytes > 0) {
         response[bytes] = '\0';
-        printf("Response received:\n%s\n", response);
+
+        char *body = strstr(response, "\r\n\r\n");
+        if (body) {
+            body += 4;
+            printf("\n%s\n", body);
+        }
     } else {
         fprintf(stderr, "SSL read error\n");
         ERR_print_errors_fp(stderr);
@@ -262,13 +295,283 @@ int send_request(SSL_CTX *ctx, SSL *ssl, char* uuid, char* combined, char* req){
     return 0;
 }
 
+char* shellPrompt() {
+    static char prompt[1024];
+    char hostn[1024] = "";
+    gethostname(hostn, sizeof(hostn));
+    snprintf(prompt, sizeof(prompt), "%s@%s > ", "CAPSVMAPI", hostn);
+    return prompt;
+}
 
-int main() {
+int commandHandler(char * args[], char *base64_login, SSL_CTX *ctx, SSL *ssl, char *groupname){
+    int j = 0;
+
+    char *args_aux[256];
+
+    while ( args[j] != NULL) {
+		if ( (strcmp(args[j],">") == 0) || (strcmp(args[j],"<") == 0) || (strcmp(args[j],"&") == 0)){
+			break;
+		}
+		args_aux[j] = args[j];
+		j++;
+	}
+
+    if(strcmp(args[0], "reset-vm") == 0 && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "resetvm");
+        } else {
+            printf("Usage: reset-vm <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "show") == 0){
+        if(strcmp(args[1], "code") == 0){
+            if(args[2] != NULL) {
+                send_request(ctx, ssl, args[2], base64_login, "vm/", "gencodevm");
+            } else {
+                printf("Usage: show code <shortname>\n");
+            }
+        }
+    }
+
+    else if(strcmp(args[0], "add-user") == 0 && strcmp(groupname, "admin") == 0){
+        if(args[1] != NULL && args[2] != NULL && args[3] != NULL && (strcmp(args[3], "admin") == 0 || strcmp(args[3], "moderator") == 0 || strcmp(args[3], "user") == 0)){
+            add_user(ctx, ssl, args[1], hash_password(args[2]), args[3], base64_login);
+        } else if (args[1] != NULL && args[2] != NULL && args[3] == NULL) {
+            printf("Usage: add-user <username> <password> <groupname>\n");
+        } else {
+            printf("You need to enter a correct groupname : admin / moderator / user\n");
+        }
+    }
+
+    else if(strcmp(args[0], "modify-user") == 0  && strcmp(groupname, "admin") == 0){
+        if(args[1] != NULL && args[2] != NULL) {
+            modify_user(ctx, ssl, args[1], args[2], base64_login);
+        } else {
+            printf("Usage: modify-user <username> <groupname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "remove-user") == 0 && strcmp(groupname, "admin") == 0){
+        if(args[1] != NULL) {
+            remove_user(ctx, ssl, args[1], base64_login);
+        } else {
+            printf("Usage: remove-user <username>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "start-vm") == 0  && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "startvm");
+        } else {
+            printf("Usage: start-vm <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "stop-vm") == 0  && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "stopvm");
+        } else {
+            printf("Usage: stop-vm <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "forcestop-vm") == 0  && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "forcestopvm");
+        } else {
+            printf("Usage: forcestop-vm <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "status-vm") == 0) {
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "statusvm");
+        } else {
+            printf("Usage: status-vm <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "status-all-vm") == 0) {
+        send_request(ctx, ssl, "all", base64_login, "vm/", "statusallvm");
+    }
+
+    else if(strcmp(args[0], "get-uuid") == 0) {
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "getuuidvm");
+        } else {
+            printf("Usage: get-uuid <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "version") == 0) {
+        send_request(ctx, ssl, "all", base64_login, "", "version");
+    }
+
+    else if(strcmp(args[0], "screendump-vm") == 0 && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "screendumpvm");
+        } else {
+            printf("Usage: screendump-vm <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "start-all-vm-fo") == 0  && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        send_request(ctx, ssl, "all", base64_login, "vm/", "startallvmfo");
+    }
+
+    else if(strcmp(args[0], "stop-all-vm-fo") == 0  && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        send_request(ctx, ssl, "all", base64_login, "vm/", "stopallvmfo");
+    }
+
+    else if(strcmp(args[0], "check-role") == 0) {
+        send_request(ctx, ssl, "", base64_login, "", "checkrole");
+    }
+
+    else if(strcmp(args[0], "status-vm-fo") == 0) {
+        send_request(ctx, ssl, "allfo", base64_login, "vm/", "statusvmfo");
+    }
+
+    else if(strcmp(args[0], "get-vm-short-list") == 0) {
+        send_request(ctx, ssl, "allfo", base64_login, "vm/", "getvmshortlist");
+    }
+
+    else if(strcmp(args[0], "ejectcd") == 0 && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(args[1] != NULL) {
+            send_request(ctx, ssl, args[1], base64_login, "vm/", "ejectcd");
+        } else {
+            printf("Usage: ejectcd <shortname>\n");
+        }
+    }
+
+    else if(strcmp(args[0], "vm") == 0 && (strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0)){
+        if(strcmp(args[1], "status") == 0) {
+            if(args[2] != NULL) {
+                send_request(ctx, ssl, args[2], base64_login, "vm/", "statusvm");
+            } else {
+                printf("Usage: vm status <shortname>\n");
+            }
+        }
+
+        if(strcmp(args[1], "start") == 0) {
+            if(args[2] != NULL) {
+                send_request(ctx, ssl, args[2], base64_login, "vm/", "startvm");
+            } else {
+                printf("Usage: vm start <shortname>\n");
+            }
+        }
+
+        if(strcmp(args[1], "stop") == 0) {
+            if(args[2] != NULL) {
+                send_request(ctx, ssl, args[2], base64_login, "vm/", "stopvm");
+            } else {
+                printf("Usage: vm stop <shortname>\n");
+            }
+        }
+
+        if(strcmp(args[1], "forcestop") == 0) {
+            if(args[2] != NULL) {
+                send_request(ctx, ssl, args[2], base64_login, "vm/", "forcestopvm");
+            } else {
+                printf("Usage: vm forcestop <shortname>\n");
+            }
+        }
+
+        if(strcmp(args[1], "reset") == 0) {
+            if(args[2] != NULL) {
+                send_request(ctx, ssl, args[2], base64_login, "vm/", "resetvm");
+            } else {
+                printf("Usage: vm reset <shortname>\n");
+            }
+        }
+    }
+
+    else if((strcmp(args[0], "help") == 0) || (strcmp(args[0], "h") == 0)){ 
+        printf("\n\t================================================================\n");
+        printf("\t\t          CAPSVMAPI - Help Interface\n");
+        printf("\t----------------------------------------------------------------\n\n");
+        if(strcmp(groupname, "admin") == 0) {
+            printf("User management:\n\n");
+            printf("add-user <username> <password> <groupname> - Add a user\n");
+            printf("modify-user <username> <groupname> - Modify a user\n");
+            printf("remove-user <username> - Remove a user\n\n\n");
+        }
+        printf("VM management:\n\n");
+        printf("Normal mode:\n");
+        if(strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0) {
+            printf("start-vm <shortname> - Start a VM\n");
+            printf("stop-vm <shortname> - Stop a VM\n");
+            printf("reset-vm <shortname> - Reset a VM\n");
+            printf("forcestop-vm <shortname> - Force stop a VM\n");
+        }
+        printf("status-vm <shortname> - Get the status of a VM\n");
+        printf("status-all-vm - Get the status of all VMs\n");
+        printf("get-uuid <shortname> - Get the UUID of a VM\n");
+        printf("show code <shortname> - Show the code of a VM\n");
+        if(strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0) {
+            printf("screendump-vm <shortname> - Get a screendump of a VM\n");
+            printf("ejectcd <shortname> - Eject the CD from a VM\n");
+        }
+        printf("\nFailover mode:\n");
+        if(strcmp(groupname, "admin") == 0 || strcmp(groupname, "moderator") == 0) {
+            printf("start-all-vm-fo - Start all VMs in the FO group\n");
+            printf("stop-all-vm-fo - Stop all VMs in the FO group\n");
+        }
+        printf("status-vm-fo - Get the status of all VMs in the FO group\n");
+        printf("get-vm-short-list - Get a short list of all VMs in the FO group\n\n\n");
+        printf("General:\n\n");
+        printf("exit - Exit the program\n");
+        printf("clear - Clear the screen\n");
+        printf("version - Get the version of the server\n");
+        printf("check-role - Check the role of the server\n");
+    }
+
+    else if(strcmp(args[0], "clear") == 0) {
+        system("clear");
+    }
+
+    else if(strcmp(args[0], "exit") == 0) {
+        exit(0);
+    } else {
+        printf("\nCommand not found. Use help for help.\n");
+    }
+
+    return 0;
+}
+
+void getPassword(char *password, size_t size) {
+    struct termios oldt, newt;
+
+    printf("Enter your password: ");
+    fflush(stdout); 
+
+    tcgetattr(STDIN_FILENO, &oldt); 
+    newt = oldt;
+    newt.c_lflag &= ~ECHO; 
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt); 
+
+    fgets(password, size, stdin); 
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); 
+
+    size_t len = strlen(password);
+    if (len > 0 && password[len-1] == '\n') {
+        password[len-1] = '\0';
+    }
+}
+
+int main(int argc, char *argv[], char ** envp) {
+    char line[MAXLINE];
+	char * tokens[LIMIT];
+	int numTokens;
+
+    char *input;
+    using_history();
+
     SSL_CTX *ctx;
     SSL *ssl;
     int sockfd;
     struct sockaddr_in serv_addr;
-    char user_groupname[100] = {0};
 
     SSL_library_init();
     OpenSSL_add_all_algorithms();
@@ -285,176 +588,68 @@ int main() {
         return -1;
     }
 
-    ssl = connect_ssl(ctx, &serv_addr);
-
     char username[100];
     char password[100];
 
-    printf("Enter your username: ");
-    scanf("%s", username);
+    char *username_input = readline("Enter your username: ");
+    if (username_input) {
+        strncpy(username, username_input, sizeof(username));
+        username[sizeof(username) - 1] = '\0';
+        free(username_input);
+    } else {
+        fprintf(stderr, "Error reading username\n");
+        return -1;
+    }
 
-    printf("Enter your password: ");
-    scanf("%s", password);
+    getPassword(password, sizeof(password));
 
     char combined[256];
     snprintf(combined, sizeof(combined), "%s:%s", username, password);
-    char *base64_encoded = base64encode((const unsigned char *)combined, strlen(combined));
-    if (!base64_encoded) {
+    char *base64_login = base64encode((const unsigned char *)combined, strlen(combined));
+    if (!base64_login) {
         fprintf(stderr, "Base64 encoding error\n");
         return -1;
     }
 
-    char *groupname = get_groupname(ctx, ssl, base64_encoded);
-    if (groupname) {
-        strncpy(user_groupname, groupname, sizeof(user_groupname) - 1);
-        printf("Group name: %s\n", user_groupname);
-    } else {
-        printf("Failed to fetch groupname\n");
-    }
+    ssl = connect_ssl(ctx, &serv_addr);
+    char *groupname = get_groupname(ctx, ssl, base64_login);
+    char *usergroup = strdup(groupname);
 
     SSL_shutdown(ssl);
     SSL_free(ssl);
 
-    if (user_groupname != NULL && strcmp(user_groupname, "admin") == 0) {
-        printf("1 : add user\n");
-        printf("2 : modify user\n");
-        printf("3 : delete user\n");
-        printf("4 : start vm\n");
-        printf("5 : stop vm\n");
-        printf("6 : forcestop vm\n");
-        printf("7 : reset vm\n");
-        printf("8 : status\n");
-        printf("9 : statusall\n");
-        int choice;
-        scanf("%d", &choice);
-        if (choice == 1) {
-            char new_Username[100];
-            char new_password[100];
-            char new_Groupname[100];
-
-            printf("Enter the username: ");
-            scanf("%s", new_Username);
-            printf("Enter the password: ");
-            scanf("%s", new_password);
-            printf("Enter the groupname: ");
-            scanf("%s", new_Groupname);
-
-            char *hash_newPassword = hash_password(new_password);
-
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            add_user(ctx, ssl, new_Username, hash_newPassword, new_Groupname, base64_encoded);
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
+    system("clear");
+    splashScreen();
+    while(TRUE){
+        printf("\n");
+		
+		input = readline(shellPrompt());
+        if (input == NULL) {
+            continue;
         }
-        else if (choice == 2){
-            char new_username[100];
-            char new_groupname[100];
 
-            printf("Enter the username: ");
-            scanf("%s", new_username);
-            printf("Enter the new groupname: ");
-            scanf("%s", new_groupname);
-
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            modify_user(ctx, ssl, new_username, new_groupname, base64_encoded);
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
+        if (strlen(input) > 0) {
+            add_history(input);
         }
-        else if (choice == 3){
-            char new_username[100];
 
-            printf("Enter the username: ");
-            scanf("%s", new_username);
+        strncpy(line, input, MAXLINE);
+        free(input);
+	
+		if((tokens[0] = strtok(line," \n\t")) == NULL) continue;
+		
+		numTokens = 1;
+		while((tokens[numTokens] = strtok(NULL, " \n\t")) != NULL) numTokens++;
+		
+        ssl = connect_ssl(ctx, &serv_addr);
+		commandHandler(tokens, base64_login, ctx, ssl, usergroup);
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+	}          
 
-            ssl = connect_ssl(ctx, &serv_addr);
+	exit(0);
 
-            remove_user(ctx, ssl, new_username, base64_encoded);
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-        } else if(choice == 4) {
-            char uuid[64];
-
-            printf("Enter the UUID of the VM: ");
-            scanf("%s", uuid);
-            
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            send_request(ctx, ssl, uuid, base64_encoded, "startvm");
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-
-        }
-        else if(choice == 5) {
-            char uuid[64];
-
-            printf("Enter the UUID of the VM: ");
-            scanf("%s", uuid);
-            
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            send_request(ctx, ssl, uuid, base64_encoded, "stopvm");
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-        }
-        else if(choice == 6) {
-            char uuid[64];
-
-            printf("Enter the UUID of the VM: ");
-            scanf("%s", uuid);
-            
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            send_request(ctx, ssl, uuid, base64_encoded, "forcestopvm");
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-        }
-        else if(choice == 7) {
-            char uuid[64];
-
-            printf("Enter the UUID of the VM: ");
-            scanf("%s", uuid);
-            
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            send_request(ctx, ssl, uuid, base64_encoded, "resetvm");
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-        }
-        else if(choice == 8) {
-            char uuid[64];
-
-            printf("Enter the UUID of the VM: ");
-            scanf("%s", uuid);
-            
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            send_request(ctx, ssl, uuid, base64_encoded, "statusvm");
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-        }
-        else if(choice == 9) {
-            ssl = connect_ssl(ctx, &serv_addr);
-
-            send_request(ctx, ssl, "test", base64_encoded, "statusallvm");
-
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-        }
-    } else {
-        printf("You do not have administrative privileges.\n");
-    }
-
-    free(base64_encoded);
+    free(usergroup);
+    free(base64_login);
     SSL_CTX_free(ctx);
 
     return 0;
