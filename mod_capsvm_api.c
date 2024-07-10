@@ -557,7 +557,7 @@ static int start_vm_handler(request_rec *r) {
     char *uuid = get_uuid_short(short_name);
     memset(vm_uuid, 0, sizeof(vm_uuid));
     snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
-    syslog(LOG_INFO, "start_vm (%s) called",short_name);
+
     ap_set_content_type(r, "text/plain");
     if (get_vm_index(vm_uuid) == -1) {
         ap_rprintf(r, "start_vm (%s) VM does not exist\n", short_name);
