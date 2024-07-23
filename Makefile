@@ -12,7 +12,7 @@ APACHECTL=apachectl
 
 .PHONY: all libcapsvm capsvm_api clean restart
 
-all: capsvm_api restart
+all: client capsvm_api restart
 
 capsvm_api: mod_capsvm_api.so
 
@@ -23,5 +23,7 @@ mod_capsvm_api.so: mod_capsvm_api.c libcapsvm.a
 restart:
 	sudo systemctl restart httpd
 
+client: ./src/client.c
+	gcc -o ./src/client.exe ./src/client.c -lcrypt -lcrypto -lssl -lreadline
 clean:
-	rm -rf *.o .libs *.la *.lo *.slo
+	rm -rf *.o .libs *.la *.lo *.slo ./src/client.exe

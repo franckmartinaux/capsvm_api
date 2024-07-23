@@ -168,50 +168,10 @@ static int getgroup_handler(request_rec *r) {
     return OK;
 }
 
-static int adduser_handler(request_rec *r) {
+static int adduser_handler(request_rec *r, const char* username, const char* password, const char* groupname) {
     sqlite3 *db;
     if (open_sqlite_db(&db) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    apr_array_header_t *pairs;
-    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
-        close_sqlite_db(db);
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    const char *username = NULL;
-    const char *password = NULL;
-    const char *groupname = NULL;
-
-    for (int i = 0; i < pairs->nelts; i++) {
-        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
-        char *buffer = NULL;
-        apr_off_t length; 
-
-        apr_brigade_length(pair->value, 1, &length);  
-
-        buffer = apr_palloc(r->pool, length + 1);
-        if (buffer == NULL) {
-            close_sqlite_db(db);
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
-
-        apr_size_t size = (apr_size_t)length;
-
-        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
-            continue;
-        }
-
-        buffer[size] = '\0'; 
-
-        if (strcmp(pair->name, "username") == 0) {
-            username = apr_pstrdup(r->pool, buffer);
-        } else if (strcmp(pair->name, "password") == 0) {
-            password = apr_pstrdup(r->pool, buffer);
-        } else if (strcmp(pair->name, "groupname") == 0) {
-            groupname = apr_pstrdup(r->pool, buffer);
-        }
     }
 
     if (username == NULL || password == NULL || groupname == NULL) {
@@ -253,47 +213,10 @@ static int adduser_handler(request_rec *r) {
     return OK;
 }
 
-static int modifyuser_handler(request_rec *r) {
+static int modifyuser_handler(request_rec *r, const char* username, const char* groupname) {
     sqlite3 *db;
     if (open_sqlite_db(&db) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    apr_array_header_t *pairs;
-    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
-        close_sqlite_db(db);
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    const char *username = NULL;
-    const char *groupname = NULL;
-
-    for (int i = 0; i < pairs->nelts; i++) {
-        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
-        char *buffer = NULL;
-        apr_off_t length;
-
-        apr_brigade_length(pair->value, 1, &length);
-
-        buffer = apr_palloc(r->pool, length + 1);
-        if (buffer == NULL) {
-            close_sqlite_db(db);
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
-
-        apr_size_t size = (apr_size_t)length;
-
-        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
-            continue;
-        }
-
-        buffer[size] = '\0';
-
-        if (strcmp(pair->name, "username") == 0) {
-            username = apr_pstrdup(r->pool, buffer);
-        } else if (strcmp(pair->name, "groupname") == 0) {
-            groupname = apr_pstrdup(r->pool, buffer);
-        }
     }
 
     if (username == NULL || groupname == NULL) {
@@ -383,43 +306,10 @@ static int modifyuser_handler(request_rec *r) {
 }
 
 
-static int deleteuser_handler(request_rec *r) {
+static int deleteuser_handler(request_rec *r, const char* username) {
     sqlite3 *db;
     if (open_sqlite_db(&db) != OK) {
         return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    apr_array_header_t *pairs;
-    if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
-        close_sqlite_db(db);
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    const char *username = NULL;
-    for (int i = 0; i < pairs->nelts; i++) {
-        ap_form_pair_t *pair = &((ap_form_pair_t *)pairs->elts)[i];
-        char *buffer = NULL;
-        apr_off_t length;
-
-        apr_brigade_length(pair->value, 1, &length);
-
-        buffer = apr_palloc(r->pool, length + 1);
-        if (buffer == NULL) {
-            close_sqlite_db(db);
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
-
-        apr_size_t size = (apr_size_t)length;
-
-        if (apr_brigade_flatten(pair->value, buffer, &size) != APR_SUCCESS) {
-            continue;
-        }
-
-        buffer[size] = '\0';
-
-        if (strcmp(pair->name, "username") == 0) {
-            username = apr_pstrdup(r->pool, buffer);
-        }
     }
 
     if (username == NULL) {
@@ -500,8 +390,9 @@ static int deleteuser_handler(request_rec *r) {
     return OK;
 }
 
-static int parse_short_name(request_rec *r, char **uuid) {
+static int parse_post_params(request_rec *r, char **short_name, char **function_name, char **username, char **password, char **groupname) {
     apr_array_header_t *pairs;
+
     if (ap_parse_form_data(r, NULL, &pairs, -1, HUGE_STRING_LEN) != OK) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to parse form data");
         return HTTP_INTERNAL_SERVER_ERROR;
@@ -513,8 +404,8 @@ static int parse_short_name(request_rec *r, char **uuid) {
         apr_off_t length;
 
         apr_brigade_length(pair->value, 1, &length);
-        buffer = apr_palloc(r->pool, length + 1);
 
+        buffer = apr_palloc(r->pool, length + 1);
         if (buffer == NULL) {
             ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to allocate memory");
             return HTTP_INTERNAL_SERVER_ERROR;
@@ -525,38 +416,43 @@ static int parse_short_name(request_rec *r, char **uuid) {
             ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to flatten brigade");
             continue;
         }
-
         buffer[size] = '\0';
 
         if (strcmp(pair->name, "short_name") == 0) {
-            *uuid = apr_pstrdup(r->pool, buffer);
-            if (*uuid == NULL) {
-                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to duplicate UUID string");
+            *short_name = apr_pstrdup(r->pool, buffer);
+        }
+
+        if (strcmp(pair->name, "function") == 0) {
+            *function_name = apr_pstrdup(r->pool, buffer);
+            if (*function_name == NULL) {
+                ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to duplicate function_name string");
                 return HTTP_INTERNAL_SERVER_ERROR;
             }
-            break;
+        }
+
+        if (strcmp(pair->name, "username") == 0) {
+            *username = apr_pstrdup(r->pool, buffer);
+        }
+
+        if (strcmp(pair->name, "password") == 0) {
+            *password = apr_pstrdup(r->pool, buffer);
+        }
+
+        if (strcmp(pair->name, "groupname") == 0) {
+            *groupname = apr_pstrdup(r->pool, buffer);
         }
     }
 
-    if (*uuid == NULL) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "UUID not found in form data");
-        return HTTP_INTERNAL_SERVER_ERROR;
+    if (*function_name == NULL) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "function_name parameter not found");
+        return HTTP_BAD_REQUEST;
     }
 
     return OK;
 }
 
-static int start_vm_handler(request_rec *r) {
 
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int start_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (get_vm_index(vm_uuid) == -1) {
@@ -572,16 +468,7 @@ static int start_vm_handler(request_rec *r) {
     return OK;
 }
 
-static int stop_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int stop_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (get_vm_index(vm_uuid) == -1){
@@ -596,16 +483,7 @@ static int stop_vm_handler(request_rec *r) {
     return OK;
 }
 
-static int forcestop_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int forcestop_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (get_vm_index(vm_uuid) == -1){
@@ -620,16 +498,7 @@ static int forcestop_vm_handler(request_rec *r) {
     return OK;
 }
 
-static int reset_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int reset_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
 
@@ -643,16 +512,7 @@ static int reset_vm_handler(request_rec *r) {
     return OK;
 }
 
-static int status_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int status_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (get_vm_index(vm_uuid) == -1){
@@ -680,16 +540,7 @@ static int statusall_vm_handler(request_rec *r) {
 
 }
 
-static int gencode_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int gencode_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (vm_retcode(vm_uuid) != NULL){
@@ -701,22 +552,13 @@ static int gencode_vm_handler(request_rec *r) {
     return OK;
 }
 
-static int get_uuid_short_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int get_uuid_short_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (get_vm_index(vm_uuid) == -1){
         ap_rprintf(r, "The VM does not exists\n");
     } else {
-        ap_rprintf(r, "%s", get_uuid_short(vm_uuid));
+        ap_rprintf(r, "%s", get_uuid_short(short_name));
     }
 
     return OK;
@@ -728,16 +570,7 @@ static int version_handler(request_rec *r) {
     return OK;
 }
 
-static int screendump_vm_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int screendump_vm_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (screendump_vm(vm_uuid) == -1){
@@ -793,16 +626,7 @@ static int get_vm_short_list_handler(request_rec *r) {
     return OK;
 }
 
-static int ejectcd_handler(request_rec *r) {
-    char *short_name = NULL;
-    if (parse_short_name(r, &short_name) != OK) {
-        return HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char vm_uuid[64];
-    char *uuid = get_uuid_short(short_name);
-    memset(vm_uuid, 0, sizeof(vm_uuid));
-    snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+static int ejectcd_handler(request_rec *r, char* vm_uuid, char* short_name) {
 
     ap_set_content_type(r, "text/plain");
     if (ejectcd(vm_uuid) == -1){
@@ -815,59 +639,84 @@ static int ejectcd_handler(request_rec *r) {
 }
 
 static int capsvm_handler(request_rec *r) {
-    if (strcmp(r->handler, "capsvm_api")) {
+    if (strcmp(r->handler, "capsvm_api") != 0) {
         return DECLINED;
     }
 
     if (r->method_number != M_POST) {
         return HTTP_METHOD_NOT_ALLOWED;
     }
-    if (strcmp(r->uri, "/capsvm_api/getgroup/") == 0) {
+
+    char *short_name = NULL;
+    char *function_name = NULL;
+    char *username = NULL;
+    char *password = NULL;
+    char *groupname = NULL;
+    if (parse_post_params(r, &short_name, &function_name, &username, &password, &groupname) != OK) {
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (function_name == NULL) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "function_name is required");
+        return HTTP_BAD_REQUEST;
+    }
+
+    char vm_uuid[64];
+    char *uuid = NULL;
+    if (short_name != NULL) {
+        uuid = get_uuid_short(short_name);
+        memset(vm_uuid, 0, sizeof(vm_uuid));
+        snprintf(vm_uuid, sizeof(vm_uuid), "%s", uuid);
+    }
+
+    if (strcmp(function_name, "getgroup") == 0) {
         return getgroup_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/management/adduser/") == 0) {
-        return adduser_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/management/modifyuser/") == 0) {
-        return modifyuser_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/management/removeuser/") == 0) {
-        return deleteuser_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/startvm/") == 0) {
-        return start_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/stopvm/") == 0) {
-        return stop_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/forcestopvm/") == 0) {
-        return forcestop_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/resetvm/") == 0) {
-        return reset_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/statusvm/") == 0) {
-        return status_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/statusallvm/") == 0) {
+    } else if (strcmp(function_name, "adduser") == 0 && strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0) {
+        return adduser_handler(r, username, password, groupname);
+    } else if (strcmp(function_name, "modifyuser") == 0 && strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0){
+        return modifyuser_handler(r, username, groupname);
+    } else if (strcmp(function_name, "removeuser") == 0 && strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0){
+        return deleteuser_handler(r, username);
+    } else if (strcmp(function_name, "startvm") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)) {
+        return start_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "stopvm") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)){
+        return stop_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "forcestopvm") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)){
+        return forcestop_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "resetvm") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)){
+        return reset_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "statusvm") == 0) {
+        return status_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "statusallvm") == 0) {
         return statusall_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/gencodevm/") == 0) {
-        return gencode_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/getuuidshortvm/") == 0) {
-        return get_uuid_short_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/version/") == 0) {
+    } else if (strcmp(function_name, "gencodevm") == 0) {
+        return gencode_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "getuuidshortvm") == 0) {
+        return get_uuid_short_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "version") == 0) {
         return version_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/screendumpvm/") == 0) {
-        return screendump_vm_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/startallvmfo/") == 0) {
+    } else if (strcmp(function_name, "screendumpvm") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)){
+        return screendump_vm_handler(r, vm_uuid, short_name);
+    } else if (strcmp(function_name, "startallvmfo") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)) {
         return start_all_vm_fo_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/stopallvmfo/") == 0) {
+    } else if (strcmp(function_name, "stopallvmfo") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)) {
         return stop_all_vm_fo_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/checkrole/") == 0) {
+    } else if (strcmp(function_name, "checkrole") == 0) {
         return check_role_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/statusvmfo/") == 0) {
+    } else if (strcmp(function_name, "statusvmfo") == 0) {
         return status_vm_fo_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/getvmshortlist/") == 0) {
+    } else if (strcmp(function_name, "getvmshortlist") == 0) {
         return get_vm_short_list_handler(r);
-    } else if (strcmp(r->uri, "/capsvm_api/vm/ejectcd/") == 0) {
-        return ejectcd_handler(r);
+    } else if (strcmp(function_name, "ejectcd") == 0 && (strcmp(apr_table_get(r->notes, "user_groupname"), "admin") == 0 || strcmp(apr_table_get(r->notes, "user_groupname"), "moderator") == 0)) {
+        return ejectcd_handler(r, vm_uuid, short_name);
     } else {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Unknown function_name: %s", function_name);
         return HTTP_NOT_FOUND;
     }
 
     return OK;
 }
+
 
 static const authn_provider capsvm_auth_provider = {
     &capsvm_check_password,
