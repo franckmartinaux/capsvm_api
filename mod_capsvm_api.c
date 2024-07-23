@@ -181,6 +181,30 @@ static int adduser_handler(request_rec *r, const char* username, const char* pas
         return OK;
     }
 
+    const char *check_sql = "SELECT username FROM users WHERE username = ?";
+    sqlite3_stmt *check_stmt;
+
+    if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to prepare check statement: %s", sqlite3_errmsg(db));
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_bind_text(check_stmt, 1, username, -1, SQLITE_STATIC) != SQLITE_OK) {
+        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Failed to bind text for check statement: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if (sqlite3_step(check_stmt) == SQLITE_ROW) {
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "User %s already exists in the database", username);
+        sqlite3_finalize(check_stmt);
+        close_sqlite_db(db);
+        return OK;
+    }
+
     const char *sql = "INSERT INTO users (username, pw, groupname) VALUES (?, ?, ?)";
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
