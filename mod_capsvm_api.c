@@ -72,6 +72,36 @@ extern int orderstart();
 extern int autostart();
 extern int create_all_taps();
 
+static int open_sqlite_db(sqlite3 **db);
+static int close_sqlite_db(sqlite3 *db);
+static authn_status capsvm_check_password(request_rec *r, const char *user, const char *password);
+static int getgroup_handler(request_rec *r);
+static int adduser_handler(request_rec *r, const char* username, const char* password, const char* groupname);
+static int modifyuser_handler(request_rec *r, const char* username, const char* groupname);
+static int deleteuser_handler(request_rec *r, const char* username);
+static int parse_post_params(request_rec *r, char **short_name, char **function_name, char **username, char **password, char **groupname);
+static int start_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int stop_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int forcestop_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int reset_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int status_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int statusall_vm_handler(request_rec *r);
+static int gencode_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int get_uuid_short_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int version_handler(request_rec *r);
+static int screendump_vm_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int start_all_vm_fo_handler(request_rec *r);
+static int stop_all_vm_fo_handler(request_rec *r);
+static int check_role_handler(request_rec *r);
+static int status_vm_fo_handler(request_rec *r);
+static int get_vm_short_list_handler(request_rec *r);
+static int ejectcd_handler(request_rec *r, char* vm_uuid, char* short_name);
+static int capsvm_handler(request_rec *r);
+static const authn_provider capsvm_auth_provider;
+static const char *set_auth_basic_provider(cmd_parms *cmd, void *config, const char *arg);
+static const char *set_db_path(cmd_parms *cmd, void *config, const char *arg);
+static const command_rec capsvm_api_cmds[];
+
 static int open_sqlite_db(sqlite3 **db) {
     int rc = sqlite3_open_v2(db_path, db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
@@ -151,8 +181,6 @@ static authn_status capsvm_check_password(request_rec *r, const char *user, cons
     create_all_taps();
     read_common_config();
     read_all_vm_config();
-    orderstart();
-    autostart();
     return AUTH_GRANTED;
 }
 

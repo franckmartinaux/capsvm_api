@@ -22,6 +22,19 @@
 #define MAXLINE 1024
 #define TRUE 1
 
+void splashScreen(char* server_ip);
+void getPassword(char *password, size_t size);
+SSL *connect_ssl(SSL_CTX *ctx, struct sockaddr_in *serv_addr);
+char *base64encode(const unsigned char *input, int length);
+char *hash_password(const char *password);
+char *get_groupname(SSL_CTX *ctx, SSL *ssl, char *combined, char* server_ip);
+char *shellPrompt();
+int add_user(SSL_CTX *ctx, SSL *ssl, char *new_Username, char *new_password, char *new_Groupname, char *combined, char* server_ip);
+int modify_user(SSL_CTX *ctx, SSL *ssl, char *username, char *new_groupname, char *combined, char* server_ip);
+int remove_user(SSL_CTX *ctx, SSL *ssl, char *username, char *combined, char* server_ip);
+int send_request(SSL_CTX *ctx, SSL *ssl, char* shortname, char* combined, char* called, char* server_ip);
+int commandHandler(char * args[], char *base64_login, SSL_CTX *ctx, SSL *ssl, char *groupname, char** server_ip);
+
 void splashScreen(char* server_ip){
         printf("\n\t================================================================\n");
         printf("\t          CAPSVMAPI - Application Programming Interface\n");
@@ -34,7 +47,7 @@ void splashScreen(char* server_ip){
         printf("\tType help for help, exit to quit\n\n");
 }
 
-SSL* connect_ssl(SSL_CTX *ctx, struct sockaddr_in *serv_addr) {
+SSL *connect_ssl(SSL_CTX *ctx, struct sockaddr_in *serv_addr) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         perror("Socket creation error");
@@ -98,7 +111,7 @@ char *base64encode(const unsigned char *input, int length) {
  * @param password The password to hash.
  * @return char* The hashed password.
  */
-char* hash_password(const char *password) {
+char *hash_password(const char *password) {
     char salt[30] = "$2b$12$";
     const char *salt_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./";
     for (int i = 7; i < 29; i++) {
@@ -300,7 +313,7 @@ int send_request(SSL_CTX *ctx, SSL *ssl, char* shortname, char* combined, char* 
     return 0;
 }
 
-char* shellPrompt() {
+char *shellPrompt() {
     static char prompt[1024];
     char hostn[1024] = "";
     gethostname(hostn, sizeof(hostn));
